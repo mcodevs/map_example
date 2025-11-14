@@ -36,6 +36,16 @@
 	</array>
 	<key>NSMotionUsageDescription</key>
 	<string>Foydalanuvchining harakat turini aniqlash uchun motion maʼlumotlaridan foydalanamiz.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Indoor navigatsiya uchun aniq GPS va geolokatsiya maʼlumotlari kerak.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Mall ichida ishonchli navigatsiya uchun fon geolokatsiya maʼlumotlaridan foydalanamiz.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Mall xaritasida aniqlikni saqlash uchun har doim geolokatsiyadan foydalanamiz.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>AR navigatsiya uchun kamera foydalanamiz.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AR navigatsiya uchun mikrofon foydalanamiz.</string>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
