@@ -88,6 +88,8 @@ class _SensorNavigationPageState extends State<SensorNavigationPage> {
 
   final _MallGeoProjector _geoProjector = _MallGeoProjector();
   final _MallGraph _mallGraph = _MallGraph.preset();
+  late final List<int> _mallFloors = _mallGraph.floors;
+  int _selectedFloor = _MallGraph.defaultFloor;
   String _targetNodeId = _MallGraph.defaultDestinationId;
   List<_NavInstruction> _navInstructions = <_NavInstruction>[];
   _MallNode? _currentNode;
@@ -118,6 +120,10 @@ class _SensorNavigationPageState extends State<SensorNavigationPage> {
     _initSensors();
     _initMotionAndFitness();
     _initGeolocation();
+    if (_mallFloors.isNotEmpty && !_mallFloors.contains(_selectedFloor)) {
+      _selectedFloor = _mallFloors.first;
+    }
+    _ensureTargetMatchesFloor();
   }
 
   void _initSensors() {
@@ -205,17 +211,22 @@ class _SensorNavigationPageState extends State<SensorNavigationPage> {
   }
 
   Future<void> _initMotionAndFitness() async {
-    // 1. Permission so‘rash (asosan Android uchun)
+    // 1. Kamera ruxsatini har ikkala platformada so‘rash
+    final PermissionStatus cameraStatus = await Permission.camera.request();
+    if (!cameraStatus.isGranted) {
+      debugPrint('Camera permission berilmadi: $cameraStatus');
+    }
+
+    // 2. Activity recognition faqat Android uchun
     if (Platform.isAndroid) {
-      final status = await Permission.activityRecognition.request();
-      await Permission.camera.request();
-      if (!status.isGranted) {
+      final PermissionStatus activityStatus = await Permission.activityRecognition.request();
+      if (!activityStatus.isGranted) {
         debugPrint('Activity Recognition permission berilmadi');
         return;
       }
     }
 
-    // 2. Activity stream
+    // 3. Activity stream
     _activitySub = _activityRecognition.activityStream().listen(
       (ActivityEvent event) {
         setState(() {
@@ -228,7 +239,7 @@ class _SensorNavigationPageState extends State<SensorNavigationPage> {
       },
     );
 
-    // 3. Step count stream
+    // 4. Step count stream
     try {
       _stepSub = Pedometer.stepCountStream.listen(
         (StepCount event) {
@@ -566,8 +577,20 @@ class _SensorNavigationPageState extends State<SensorNavigationPage> {
     _arStatus = 'AR idle';
   }
 
+  void _ensureTargetMatchesFloor() {
+    final _MallNode? targetNode = _mallGraph.findNode(_targetNodeId);
+    if (targetNode != null && targetNode.floor == _selectedFloor) {
+      return;
+    }
+    final _MallNode? fallback = _mallGraph.firstNodeOnFloor(_selectedFloor);
+    if (fallback != null) {
+      _targetNodeId = fallback.id;
+    }
+  }
+
   void _updateNavigationSolution() {
-    final _MallNode? nearest = _mallGraph.nearestNode(_position);
+    _ensureTargetMatchesFloor();
+    final _MallNode? nearest = _mallGraph.nearestNode(_position, floor: _selectedFloor);
     _currentNode = nearest;
     if (nearest == null) {
       _navInstructions = <_NavInstruction>[];
@@ -576,7 +599,7 @@ class _SensorNavigationPageState extends State<SensorNavigationPage> {
       _distanceToNextInstruction = null;
       return;
     }
-    final List<String> path = _mallGraph.shortestPath(nearest.id, _targetNodeId);
+    final List<String> path = _mallGraph.shortestPath(nearest.id, _targetNodeId, floor: _selectedFloor);
     _navInstructions = _mallGraph.describePath(
       path: path,
       metersToPixels: _metersToPixels,
@@ -771,8 +794,12 @@ class _SensorNavigationPageState extends State<SensorNavigationPage> {
   }
 
   Widget _buildNavigatorPanel() {
-    final List<_MallNode> destinations = _mallGraph.destinations;
-    final String currentZone = _currentNode?.name ?? 'Calibrating position...';
+    final List<_MallNode> destinations = _mallGraph.destinationsForFloor(_selectedFloor);
+    final bool hasDestinations = destinations.isNotEmpty;
+    final _MallNode? currentNode = _currentNode;
+    final String currentZoneLabel = currentNode != null
+        ? 'You are near: ${currentNode.name} · Floor ${currentNode.floor}'
+        : 'Calibrating position · Floor $_selectedFloor';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -791,21 +818,45 @@ class _SensorNavigationPageState extends State<SensorNavigationPage> {
               const Text('Mall navigator', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               const Spacer(),
               DropdownButton<String>(
-                value: _targetNodeId,
+                value: hasDestinations ? _targetNodeId : null,
+                hint: const Text('No destinations'),
                 dropdownColor: Colors.grey.shade900,
                 items: destinations.map((node) => DropdownMenuItem(value: node.id, child: Text(node.name))).toList(),
-                onChanged: (value) {
-                  if (value == null) return;
-                  setState(() {
-                    _targetNodeId = value;
-                    _updateNavigationSolution();
-                  });
-                },
+                onChanged: hasDestinations
+                    ? (value) {
+                        if (value == null) return;
+                        setState(() {
+                          _targetNodeId = value;
+                          _updateNavigationSolution();
+                        });
+                      }
+                    : null,
               ),
             ],
           ),
           const SizedBox(height: 8),
-          Text('You are near: $currentZone', style: const TextStyle(color: Colors.white70)),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _mallFloors
+                .map(
+                  (floor) => ChoiceChip(
+                    label: Text('Floor $floor'),
+                    selected: _selectedFloor == floor,
+                    onSelected: (_) {
+                      if (_selectedFloor == floor) return;
+                      setState(() {
+                        _selectedFloor = floor;
+                        _ensureTargetMatchesFloor();
+                        _updateNavigationSolution();
+                      });
+                    },
+                  ),
+                )
+                .toList(),
+          ),
+          const SizedBox(height: 8),
+          Text(currentZoneLabel, style: const TextStyle(color: Colors.white70)),
           const SizedBox(height: 12),
           if (_navInstructions.isEmpty)
             const Text('Waiting for a stable fix to compute the path...', style: TextStyle(color: Colors.white60))
@@ -1251,6 +1302,7 @@ class _MallGraph {
   _MallGraph._(this._nodes, this._adjacency);
 
   static const String defaultDestinationId = 'food_court';
+  static const int defaultFloor = 1;
 
   factory _MallGraph.preset() {
     const double u = _SensorNavigationPageState._metersToPixels;
@@ -1297,12 +1349,31 @@ class _MallGraph {
     return list;
   }
 
+  List<int> get floors {
+    final List<int> uniqueFloors = _nodes.values.map((node) => node.floor).toSet().toList();
+    uniqueFloors.sort();
+    return uniqueFloors;
+  }
+
+  List<_MallNode> destinationsForFloor(int floor) {
+    return destinations.where((node) => node.floor == floor).toList();
+  }
+
+  _MallNode? firstNodeOnFloor(int floor) {
+    final filtered = destinationsForFloor(floor);
+    if (filtered.isEmpty) return null;
+    return filtered.first;
+  }
+
   _MallNode? findNode(String id) => _nodes[id];
 
-  _MallNode? nearestNode(Offset position) {
+  _MallNode? nearestNode(Offset position, {int? floor}) {
     _MallNode? best;
     double bestDistance = double.infinity;
     for (final _MallNode node in _nodes.values) {
+      if (floor != null && node.floor != floor) {
+        continue;
+      }
       final double distance = (node.position - position).distance;
       if (distance < bestDistance) {
         bestDistance = distance;
@@ -1312,8 +1383,15 @@ class _MallGraph {
     return best;
   }
 
-  List<String> shortestPath(String startId, String endId) {
-    if (!_nodes.containsKey(startId) || !_nodes.containsKey(endId)) {
+  List<String> shortestPath(String startId, String endId, {int? floor}) {
+    bool isAllowed(String nodeId) {
+      final _MallNode? node = _nodes[nodeId];
+      if (node == null) return false;
+      if (floor != null && node.floor != floor) return false;
+      return true;
+    }
+
+    if (!isAllowed(startId) || !isAllowed(endId)) {
       return <String>[];
     }
     final Set<String> visited = <String>{};
@@ -1325,7 +1403,7 @@ class _MallGraph {
       String? current;
       double smallest = double.infinity;
       distance.forEach((nodeId, value) {
-        if (!visited.contains(nodeId) && value < smallest) {
+        if (!visited.contains(nodeId) && isAllowed(nodeId) && value < smallest) {
           smallest = value;
           current = nodeId;
         }
@@ -1334,6 +1412,7 @@ class _MallGraph {
       if (current == endId) break;
       visited.add(current!);
       for (final edge in _adjacency[current] ?? const <_MallEdge>[]) {
+        if (!isAllowed(edge.target)) continue;
         final double alt = distance[current]! + edge.weight;
         if (alt < distance[edge.target]!) {
           distance[edge.target] = alt;
